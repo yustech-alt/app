@@ -67,6 +67,22 @@ def normalize_verdict(v):
         return "INTENTIONAL"
     return "UNCERTAIN"
 
+def suggest_rewrite(claim, note, script_text):
+    rewrite_prompt = f"""
+A screenplay contains this line or claim, which has been fact-checked and found incorrect:
+
+ORIGINAL CLAIM: {claim}
+CORRECTION: {note}
+
+Here is the surrounding script for context:
+{script_text}
+
+Rewrite just the specific line containing this claim so it is factually correct,
+while keeping the character's voice, tone, and the natural flow of dialogue or
+action. Return ONLY the corrected line, nothing else, no explanation, no quotes.
+"""
+    response = generate_with_retry(gemini_client, MODEL, rewrite_prompt)
+    return response.text.strip()
 
 def check_script(script_text, genre="Drama"):
     extract_prompt = f"""
@@ -126,7 +142,18 @@ VERDICT must be one of: VERIFIED, FLAGGED, INTENTIONAL, UNCERTAIN
                     verdict = normalize_verdict(parts[1].strip())
                     note = parts[2].strip()
                 break
-        results.append({"claim": ce["claim"], "verdict": verdict, "note": note, "source": ce["source"]})
+
+        rewrite = None
+        if verdict == "FLAGGED":
+            rewrite = suggest_rewrite(ce["claim"], note, script_text)
+
+        results.append({
+            "claim": ce["claim"],
+            "verdict": verdict,
+            "note": note,
+            "source": ce["source"],
+            "rewrite": rewrite,
+        })
 
     return results
 
@@ -531,6 +558,16 @@ PAGE = """
     margin: 0 0 6px;
     line-height: 1.55;
   }
+  .note-body .rewrite {
+    font-size: 14px;
+    color: #2c5e3f;
+    background: #eef5f0;
+    border-left: 3px solid var(--verified);
+    padding: 8px 12px;
+    margin: 8px 0;
+    line-height: 1.5;
+    font-family: 'Courier Prime', monospace;
+  }
   .note-body .src {
     font-family: 'Inter', sans-serif;
     font-size: 12px;
@@ -647,11 +684,12 @@ PAGE = """
       <div class="results">
         <h2>Coverage notes</h2>
         {% for r in results %}
-          <div class="note-card {{ r.verdict }}">
+       <div class="note-card {{ r.verdict }}">
             <div class="stamp">{{ 'CLEARED' if r.verdict == 'VERIFIED' else r.verdict }}</div>
             <div class="note-body">
               <p class="claim">&ldquo;{{ r.claim }}&rdquo;</p>
               <p class="note">{{ r.note }}</p>
+              {% if r.rewrite %}<p class="rewrite"><strong>Suggested fix:</strong> {{ r.rewrite }}</p>{% endif %}
               {% if r.source %}<p class="src">Source: {{ r.source }}</p>{% endif %}
             </div>
           </div>
